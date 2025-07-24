@@ -757,23 +757,41 @@ def printResult(file, node_feature, edge_feature):
 
 
 if __name__ == "__main__":
-    test_contract = "../../data/reentrancy/source_code/cross-function-reentrancy.sol"
-    node_feature, edge_feature = generate_graph(test_contract)
-    node_feature = sorted(node_feature, key=lambda x: (x[0]))
-    edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
-   # node_feature, edge_feature = generate_potential_fallback_node(node_feature, edge_feature)
-    print("node_feature", node_feature)
-    print("edge_feature", edge_feature)
+#     test_contract = "../../data/reentrancy/source_code/cross-function-reentrancy.sol"
+#     node_feature, edge_feature = generate_graph(test_contract)
+#     node_feature = sorted(node_feature, key=lambda x: (x[0]))
+#     edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
+#    # node_feature, edge_feature = generate_potential_fallback_node(node_feature, edge_feature)
+#     print("node_feature", node_feature)
+#     print("edge_feature", edge_feature)
 
-    # inputFileDir = "../../data/reentrancy/source_code/"
-    # dirs = os.listdir(inputFileDir)
-    # start_time = time.time()
-    # for file in dirs:
-    #     inputFilePath = inputFileDir + file
-    #     node_feature, edge_feature = generate_graph(inputFilePath)
-    #     node_feature = sorted(node_feature, key=lambda x: (x[0]))
-    #     edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
-    #     printResult(file, node_feature, edge_feature)
-    #
-    # end_time = time.time()
-    # print(end_time - start_time)
+    inputFileDir = "../../data/reentrancy/source_code/"
+    dirs = os.listdir(inputFileDir)
+    start_time = time.time()
+    for file in dirs:
+        try:
+            inputFilePath = inputFileDir + file
+            node_feature, edge_feature = generate_graph(inputFilePath)
+            node_feature = sorted(node_feature, key=lambda x: (x[0]))
+            edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
+            printResult(file, node_feature, edge_feature)
+        except Exception as e:
+            print(f"Error processing {file}: {e}")
+            print("skipping...")
+
+    # Remove any source code files that were skipped due to errors during processing
+    graph_dir = "../../data/reentrancy/graph_data/node/"
+    processed_files = set(os.listdir(graph_dir))
+    # List all files in the directory again to find skipped files
+    all_files = set(os.listdir(inputFileDir))
+    skipped_files = all_files - processed_files
+    for skipped_file in skipped_files:
+        skipped_path = os.path.join(inputFileDir, skipped_file)
+        try:
+            os.remove(skipped_path)
+            print(f"Removed skipped source code file: {skipped_file}")
+        except Exception as remove_err:
+            print(f"Failed to remove {skipped_file}: {remove_err}")
+    
+    end_time = time.time()
+    print(end_time - start_time)

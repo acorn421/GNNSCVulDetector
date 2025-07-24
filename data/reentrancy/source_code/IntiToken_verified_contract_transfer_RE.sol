@@ -1,0 +1,202 @@
+/*
+ * ===== SmartInject Injection Details =====
+ * Function      : transfer
+ * Vulnerability : Reentrancy
+ * Status        : Verified
+ * Type          : Function Modification
+ *
+ * === Verification Results ===
+ * Detected      : True
+ * Relevant      : 2 findings
+ * Total Found   : 2 issues
+ * Retry Count   : 0
+ *
+ * === Detected Issues ===
+ * 1. reentrancy-no-eth (SWC-107)
+ * 2. reentrancy-events (SWC-107)
+ *
+ * === Description ===
+ * Introduced a stateful, multi-transaction reentrancy vulnerability by:
+ * 
+ * 1. **Added external call before state updates**: The function now calls `ITokenReceiver(_to).onTokenReceived()` before updating balances, violating the Checks-Effects-Interactions (CEI) pattern.
+ * 
+ * 2. **Created callback mechanism**: The recipient contract can now receive a callback during the transfer process, allowing it to manipulate state while the sender's balance hasn't been updated yet.
+ * 
+ * **How the vulnerability can be exploited across multiple transactions:**
+ * 
+ * 1. **Setup Phase (Transaction 1)**: Attacker deploys a malicious contract that implements `ITokenReceiver` interface
+ * 2. **Initial State Preparation (Transaction 2)**: Attacker obtains some tokens (e.g., 100 tokens) through normal means
+ * 3. **Exploitation Phase (Transaction 3)**: Attacker calls `transfer()` to send tokens to their malicious contract:
+ *    - The `transfer()` function checks balance (100 tokens >= 100 tokens ✓)
+ *    - External call is made to attacker's contract via `onTokenReceived()`
+ *    - **During callback**: Attacker's contract can call `transfer()` again recursively
+ *    - Each reentrant call sees the same unchanged balance state (still 100 tokens)
+ *    - Multiple transfers can occur before any balance updates happen
+ *    - Attacker can drain significantly more tokens than their actual balance
+ * 
+ * **Why the vulnerability requires multiple transactions:**
+ * 
+ * 1. **State Accumulation**: The vulnerability relies on the attacker first accumulating tokens through legitimate means in earlier transactions
+ * 2. **Contract Deployment**: The malicious receiver contract must be deployed and prepared in advance
+ * 3. **Persistent State Exploitation**: The attack exploits the persistent balance state that exists between the balance check and balance update
+ * 4. **Multi-Call Dependency**: The vulnerability manifests through multiple function calls within the same transaction tree, but requires prior state setup
+ * 
+ * **Exploitation Example:**
+ * ```solidity
+ * contract MaliciousReceiver is ITokenReceiver {
+ *     IntiToken token;
+ *     uint256 public attackCount;
+ *     
+ *     function onTokenReceived(address from, uint256 value) external {
+ *         if (attackCount < 5) { // Limit to prevent infinite recursion
+ *             attackCount++;
+ *             token.transfer(address(this), value); // Reentrant call
+ *         }
+ *     }
+ * }
+ * ```
+ * 
+ * This creates a realistic vulnerability where the attacker can drain multiple times their balance through carefully orchestrated multi-transaction exploitation.
+ */
+/*
+Author: Hugo M. Campos
+Version: 0.2
+.*/
+
+pragma solidity ^0.4.21;
+
+// Define the ITokenReceiver interface for the callback
+interface ITokenReceiver {
+    function onTokenReceived(address from, uint256 value) external returns (bool);
+}
+
+contract IntiInterface {
+    /* This is a slight change to the ERC20 base standard.
+    function totalSupply() constant returns (uint256 supply);
+    is replaced with:
+    uint256 public totalSupply;
+    This automatically creates a getter function for the totalSupply.
+    This is moved to the base contract since public getter functions are not
+    currently recognised as an implementation of the matching abstract
+    function by the compiler.
+    */
+    /// total amount of tokens
+    uint256 public totalSupply;
+
+    /// @param _owner The address from which the balance will be retrieved
+    /// @return The balance
+    function balanceOf(address _owner) public view returns (uint256 balance);
+
+    /// @notice send `_value` token to `_to` from `msg.sender`
+    /// @param _to The address of the recipient
+    /// @param _value The amount of token to be transferred
+    /// @return Whether the transfer was successful or not
+    function transfer(address _to, uint256 _value) public returns (bool success) {
+        require(balances[msg.sender] >= _value);
+        // ===== SMARTINJECT: Reentrancy VULNERABILITY START =====
+        
+        // VULNERABILITY: External call before state update creates reentrancy
+        // Check if recipient is a contract and notify it
+        if (isContract(_to)) {
+            // Call to user-controlled contract before state changes
+            // No try/catch in 0.4.21 - use low-level call and ignore return
+            ITokenReceiver(_to).onTokenReceived(msg.sender, _value);
+        }
+        
+        // ===== SMARTINJECT: Reentrancy VULNERABILITY END =====
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+        emit Transfer(msg.sender, _to, _value); //solhint-disable-line indent, no-unused-vars
+        return true;
+    }
+
+    // Add a function to check if an address is a contract (for pre-0.5.0)
+    function isContract(address addr) internal view returns (bool) {
+        uint size;
+        assembly { size := extcodesize(addr) }
+        return size > 0;
+    }
+
+    /// @notice send `_value` token to `_to` from `_from` on the condition it is approved by `_from`
+    /// @param _from The address of the sender
+    /// @param _to The address of the recipient
+    /// @param _value The amount of token to be transferred
+    /// @return Whether the transfer was successful or not
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success);
+
+    /// @notice `msg.sender` approves `_spender` to spend `_value` tokens
+    /// @param _spender The address of the account able to transfer the tokens
+    /// @param _value The amount of tokens to be approved for transfer
+    /// @return Whether the approval was successful or not
+    function approve(address _spender, uint256 _value) public returns (bool success);
+
+    /// @param _owner The address of the account owning tokens
+    /// @param _spender The address of the account able to transfer the tokens
+    /// @return Amount of remaining tokens allowed to spent
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining);
+
+    // solhint-disable-next-line no-simple-event-func-name
+    event Transfer(address indexed _from, address indexed _to, uint256 _value);
+    event Approval(address indexed _owner, address indexed _spender, uint256 _value);
+
+    // Declare balances mapping so transfer function can access it
+    mapping (address => uint256) public balances;
+}
+
+contract IntiToken is IntiInterface {
+
+    uint256 constant private MAX_UINT256 = 2**256 - 1;
+    // mapping (address => uint256) public balances; // Moved to IntiInterface
+    mapping (address => mapping (address => uint256)) public allowed;
+
+    string public name;                   
+    uint8 public decimals;                
+    string public symbol;                 
+
+    function IntiToken(
+        uint256 _initialAmount,
+        string _tokenName,
+        uint8 _decimalUnits,
+        string _tokenSymbol
+    ) public {
+        balances[msg.sender] = _initialAmount;               // Give the creator all initial tokens
+        totalSupply = _initialAmount;                        // Update total supply
+        name = _tokenName;                                   // Set the name for display purposes
+        decimals = _decimalUnits;                            // Amount of decimals for display purposes
+        symbol = _tokenSymbol;                               // Set the symbol for display purposes
+    }
+
+    function transfer(address _to, uint256 _value) public returns (bool success) {
+        require(balances[msg.sender] >= _value);
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+        emit Transfer(msg.sender, _to, _value); //solhint-disable-line indent, no-unused-vars
+        return true;
+    }
+
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        uint256 allowance = allowed[_from][msg.sender];
+        require(balances[_from] >= _value && allowance >= _value);
+        balances[_to] += _value;
+        balances[_from] -= _value;
+        if (allowance < MAX_UINT256) {
+            allowed[_from][msg.sender] -= _value;
+        }
+        emit Transfer(_from, _to, _value); //solhint-disable-line indent, no-unused-vars
+        return true;
+    }
+
+    function balanceOf(address _owner) public view returns (uint256 balance) {
+        return balances[_owner];
+    }
+
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+        allowed[msg.sender][_spender] = _value;
+        emit Approval(msg.sender, _spender, _value); //solhint-disable-line indent, no-unused-vars
+        return true;
+    }
+
+    function allowance(address _owner, address _spender) public view returns (uint256 remaining) {
+        return allowed[_owner][_spender];
+    }
+}

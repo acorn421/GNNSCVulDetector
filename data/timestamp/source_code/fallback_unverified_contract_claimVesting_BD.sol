@@ -1,0 +1,226 @@
+/*
+ * ===== SmartInject Injection Details =====
+ * Function      : claimVesting
+ * Vulnerability : Timestamp Dependence
+ * Status        : Not Detected
+ * Type          : Fallback Function Addition
+ *
+ * === Verification Results ===
+ * Detected      : False
+ * Relevant      : 0 findings
+ * Total Found   : 5 issues
+ * Retry Count   : 0
+ *
+ * === Description ===
+ * This vulnerability introduces timestamp dependence through a vesting mechanism that requires multiple transactions to exploit. The vulnerability is stateful because it depends on the vestingStart timestamp and claimedAmount state variables that persist between transactions. An attacker (especially a miner) can manipulate the block timestamp to claim more tokens than they should be able to at a given time. The exploitation requires: 1) Setting up vesting (first transaction), 2) Waiting and potentially manipulating timestamps, 3) Claiming tokens multiple times as the timestamp-dependent calculation allows (subsequent transactions). This creates a multi-transaction vulnerability where the state changes persist and accumulate over time.
+ */
+pragma solidity ^0.4.16;
+
+interface tokenRecipient { function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) public; }
+
+contract ESTD {
+    // Public variables of the token
+    string public name;
+    string public symbol;
+    uint8 public decimals = 18;
+    // 18 decimals is the strongly suggested default, avoid changing it
+    uint256 public totalSupply;
+
+    // This creates an array with all balances
+    mapping (address => uint256) public balanceOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    // === FALLBACK INJECTION: Timestamp Dependence ===
+    // Vesting state variables
+    mapping (address => uint256) public vestingAmount;
+    mapping (address => uint256) public vestingStart;
+    mapping (address => uint256) public vestingDuration;
+    mapping (address => uint256) public claimedAmount;
+
+    // Time-based events
+    event VestingScheduled(address indexed beneficiary, uint256 amount, uint256 duration);
+    event VestingClaimed(address indexed beneficiary, uint256 amount);
+    // === END FALLBACK INJECTION ===
+
+    // This generates a public event on the blockchain that will notify clients
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    // This notifies clients about the amount burnt
+    event Burn(address indexed from, uint256 value);
+
+    /**
+     * Constrctor function
+     *
+     * Initializes contract with initial supply tokens to the creator of the contract
+     */
+    function ESTD(
+        uint256 initialSupply,
+        string tokenName,
+        string tokenSymbol
+    ) public {
+        totalSupply = initialSupply * 10 ** uint256(decimals);  // Update total supply with the decimal amount
+        balanceOf[msg.sender] = totalSupply;                // Give the creator all initial tokens
+        name = tokenName;                                   // Set the name for display purposes
+        symbol = tokenSymbol;                               // Set the symbol for display purposes
+    }
+
+    /**
+     * Set up vesting schedule for beneficiary
+     *
+     * @param _beneficiary The address that will receive vested tokens
+     * @param _amount Total amount of tokens to vest
+     * @param _duration Duration in seconds for vesting period
+     */
+    function setupVesting(address _beneficiary, uint256 _amount, uint256 _duration) public {
+        require(_beneficiary != 0x0);
+        require(_amount > 0);
+        require(_duration > 0);
+        require(balanceOf[msg.sender] >= _amount);
+        require(vestingAmount[_beneficiary] == 0); // No existing vesting
+        // Transfer tokens to this contract for vesting
+        balanceOf[msg.sender] -= _amount;
+        vestingAmount[_beneficiary] = _amount;
+        vestingStart[_beneficiary] = now; // Vulnerable: relies on block.timestamp
+        vestingDuration[_beneficiary] = _duration;
+        claimedAmount[_beneficiary] = 0;
+        VestingScheduled(_beneficiary, _amount, _duration);
+    }
+
+    /**
+     * Claim vested tokens based on time elapsed
+     * VULNERABILITY: Miners can manipulate block timestamp to affect vesting calculations
+     */
+    function claimVesting() public {
+        require(vestingAmount[msg.sender] > 0);
+        require(vestingStart[msg.sender] > 0);
+        uint256 elapsedTime = now - vestingStart[msg.sender]; // Vulnerable: timestamp dependence
+        uint256 vestedAmount;
+        if (elapsedTime >= vestingDuration[msg.sender]) {
+            // Fully vested
+            vestedAmount = vestingAmount[msg.sender];
+        } else {
+            // Partially vested - vulnerable calculation
+            vestedAmount = (vestingAmount[msg.sender] * elapsedTime) / vestingDuration[msg.sender];
+        }
+        uint256 claimableAmount = vestedAmount - claimedAmount[msg.sender];
+        require(claimableAmount > 0);
+        claimedAmount[msg.sender] += claimableAmount;
+        balanceOf[msg.sender] += claimableAmount;
+        VestingClaimed(msg.sender, claimableAmount);
+    }
+
+    /**
+     * Internal transfer, only can be called by this contract
+     */
+    function _transfer(address _from, address _to, uint _value) internal {
+        // Prevent transfer to 0x0 address. Use burn() instead
+        require(_to != 0x0);
+        // Check if the sender has enough
+        require(balanceOf[_from] >= _value);
+        // Check for overflows
+        require(balanceOf[_to] + _value > balanceOf[_to]);
+        // Save this for an assertion in the future
+        uint previousBalances = balanceOf[_from] + balanceOf[_to];
+        // Subtract from the sender
+        balanceOf[_from] -= _value;
+        // Add the same to the recipient
+        balanceOf[_to] += _value;
+        Transfer(_from, _to, _value);
+        // Asserts are used to use static analysis to find bugs in your code. They should never fail
+        assert(balanceOf[_from] + balanceOf[_to] == previousBalances);
+    }
+
+    /**
+     * Transfer tokens
+     *
+     * Send `_value` tokens to `_to` from your account
+     *
+     * @param _to The address of the recipient
+     * @param _value the amount to send
+     */
+    function transfer(address _to, uint256 _value) public {
+        _transfer(msg.sender, _to, _value);
+    }
+
+    /**
+     * Transfer tokens from other address
+     *
+     * Send `_value` tokens to `_to` on behalf of `_from`
+     *
+     * @param _from The address of the sender
+     * @param _to The address of the recipient
+     * @param _value the amount to send
+     */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_value <= allowance[_from][msg.sender]);     // Check allowance
+        allowance[_from][msg.sender] -= _value;
+        _transfer(_from, _to, _value);
+        return true;
+    }
+
+    /**
+     * Set allowance for other address
+     *
+     * Allows `_spender` to spend no more than `_value` tokens on your behalf
+     *
+     * @param _spender The address authorized to spend
+     * @param _value the max amount they can spend
+     */
+    function approve(address _spender, uint256 _value) public
+        returns (bool success) {
+        allowance[msg.sender][_spender] = _value;
+        return true;
+    }
+
+    /**
+     * Set allowance for other address and notify
+     *
+     * Allows `_spender` to spend no more than `_value` tokens on your behalf, and then ping the contract about it
+     *
+     * @param _spender The address authorized to spend
+     * @param _value the max amount they can spend
+     * @param _extraData some extra information to send to the approved contract
+     */
+    function approveAndCall(address _spender, uint256 _value, bytes _extraData)
+        public
+        returns (bool success) {
+        tokenRecipient spender = tokenRecipient(_spender);
+        if (approve(_spender, _value)) {
+            spender.receiveApproval(msg.sender, _value, this, _extraData);
+            return true;
+        }
+    }
+
+    /**
+     * Destroy tokens
+     *
+     * Remove `_value` tokens from the system irreversibly
+     *
+     * @param _value the amount of money to burn
+     */
+    function burn(uint256 _value) public returns (bool success) {
+        require(balanceOf[msg.sender] >= _value);   // Check if the sender has enough
+        balanceOf[msg.sender] -= _value;            // Subtract from the sender
+        totalSupply -= _value;                      // Updates totalSupply
+        Burn(msg.sender, _value);
+        return true;
+    }
+
+    /**
+     * Destroy tokens from other account
+     *
+     * Remove `_value` tokens from the system irreversibly on behalf of `_from`.
+     *
+     * @param _from the address of the sender
+     * @param _value the amount of money to burn
+     */
+    function burnFrom(address _from, uint256 _value) public returns (bool success) {
+        require(balanceOf[_from] >= _value);                // Check if the targeted balance is enough
+        require(_value <= allowance[_from][msg.sender]);    // Check allowance
+        balanceOf[_from] -= _value;                         // Subtract from the targeted balance
+        allowance[_from][msg.sender] -= _value;             // Subtract from the sender's allowance
+        totalSupply -= _value;                              // Update totalSupply
+        Burn(_from, _value);
+        return true;
+    }
+}

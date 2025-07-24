@@ -1,0 +1,230 @@
+/*
+ * ===== SmartInject Injection Details =====
+ * Function      : burn
+ * Vulnerability : Reentrancy
+ * Status        : Verified
+ * Type          : Function Modification
+ *
+ * === Verification Results ===
+ * Detected      : True
+ * Relevant      : 3 findings
+ * Total Found   : 4 issues
+ * Retry Count   : 0
+ *
+ * === Detected Issues ===
+ * 1. reentrancy-no-eth (SWC-107)
+ * 2. reentrancy-benign (SWC-107)
+ * 3. reentrancy-events (SWC-107)
+ *
+ * === Description ===
+ * **Specific Changes Made:**
+ * 
+ * 1. **Added External Call Before State Updates**: Introduced a callback mechanism that calls `onBeforeBurn()` on the sender's contract before updating balances
+ * 2. **Violated Checks-Effects-Interactions Pattern**: The external call now occurs after the balance check but before the state modifications
+ * 3. **Created Reentrancy Window**: The callback allows the sender to call back into the contract while the original transaction is still executing
+ * 
+ * **Multi-Transaction Exploitation Scenario:**
+ * 
+ * **Transaction 1 (Setup):**
+ * - Attacker deploys a malicious contract with initial token balance of 100 tokens
+ * - The malicious contract implements `onBeforeBurn()` callback function
+ * 
+ * **Transaction 2 (Exploitation):**
+ * - Attacker calls `burn(100)` from their malicious contract
+ * - The function checks `balanceOf[attacker] >= 100` ✓ (passes)
+ * - The function calls `attacker.onBeforeBurn(100)` BEFORE updating balances
+ * - Inside `onBeforeBurn()`, the malicious contract calls `burn(100)` again
+ * - The second call checks `balanceOf[attacker] >= 100` ✓ (still passes because balance hasn't been updated yet)
+ * - This creates a recursive chain where the attacker can burn more tokens than they own
+ * 
+ * **Why Multi-Transaction is Required:**
+ * 
+ * 1. **State Persistence**: The vulnerability relies on the persistent state of `balanceOf` and `totalSupply` between function calls
+ * 2. **Accumulated Effect**: Each reentrant call compounds the effect, allowing the attacker to burn tokens they don't have
+ * 3. **Cross-Call Dependencies**: The exploit requires the state changes from inner calls to affect outer calls
+ * 4. **Chain of Calls**: The attack requires a sequence of nested function calls within the same transaction, but the effectiveness builds up across the call chain
+ * 
+ * **Realistic Integration:**
+ * - The callback mechanism appears legitimate (notifying contracts about burns)
+ * - The code maintains original functionality while adding the vulnerability
+ * - The pattern is common in modern DeFi protocols that use callback mechanisms
+ * - The vulnerability is subtle and could easily be missed in code reviews
+ */
+pragma solidity ^0.4.16;
+
+interface tokenRecipient { function receiveApproval(address _from, uint256 _value, address _token, bytes _extraData) external; }
+
+contract Bourneereum {
+// Public variables of the token
+string public name;
+string public symbol;
+uint8 public decimals = 18;
+// 18 decimals is the strongly suggested default, avoid changing it
+uint256 public totalSupply;
+
+// This creates an array with all balances
+mapping (address => uint256) public balanceOf;
+mapping (address => mapping (address => uint256)) public allowance;
+
+// This generates a public event on the blockchain that will notify clients
+event Transfer(address indexed from, address indexed to, uint256 value);
+
+// This notifies clients about the amount burnt
+event Burn(address indexed from, uint256 value);
+
+/**
+* Constrctor function
+*
+* Initializes contract with initial supply tokens to the creator of the contract
+*/
+constructor(
+uint256 initialSupply,
+string tokenName,
+string tokenSymbol
+) public {
+totalSupply = initialSupply * 10 ** uint256(decimals);  // Update total supply with the decimal amount
+balanceOf[msg.sender] = totalSupply;                // Give the creator all initial tokens
+name = tokenName;                                   // Set the name for display purposes
+symbol = tokenSymbol;                               // Set the symbol for display purposes
+}
+
+/**
+* Internal transfer, only can be called by this contract
+*/
+function _transfer(address _from, address _to, uint _value) internal {
+// Prevent transfer to 0x0 address. Use burn() instead
+require(_to != 0x0);
+// Check if the sender has enough
+require(balanceOf[_from] >= _value);
+// Check for overflows
+require(balanceOf[_to] + _value > balanceOf[_to]);
+// Save this for an assertion in the future
+uint previousBalances = balanceOf[_from] + balanceOf[_to];
+// Subtract from the sender
+balanceOf[_from] -= _value;
+// Add the same to the recipient
+balanceOf[_to] += _value;
+emit Transfer(_from, _to, _value);
+// Asserts are used to use static analysis to find bugs in your code. They should never fail
+assert(balanceOf[_from] + balanceOf[_to] == previousBalances);
+}
+
+/**
+* Transfer tokens
+*
+* Send `_value` tokens to `_to` from your account
+*
+* @param _to The address of the recipient
+* @param _value the amount to send
+*/
+function transfer(address _to, uint256 _value) public {
+_transfer(msg.sender, _to, _value);
+}
+
+/**
+* Transfer tokens from other address
+*
+* Send `_value` tokens to `_to` in behalf of `_from`
+*
+* @param _from The address of the sender
+* @param _to The address of the recipient
+* @param _value the amount to send
+*/
+function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+require(_value <= allowance[_from][msg.sender]);     // Check allowance
+allowance[_from][msg.sender] -= _value;
+_transfer(_from, _to, _value);
+return true;
+}
+
+/**
+* Set allowance for other address
+*
+* Allows `_spender` to spend no more than `_value` tokens in your behalf
+*
+* @param _spender The address authorized to spend
+* @param _value the max amount they can spend
+*/
+function approve(address _spender, uint256 _value) public
+returns (bool success) {
+allowance[msg.sender][_spender] = _value;
+return true;
+}
+
+/**
+* Set allowance for other address and notify
+*
+* Allows `_spender` to spend no more than `_value` tokens in your behalf, and then ping the contract about it
+*
+* @param _spender The address authorized to spend
+* @param _value the max amount they can spend
+* @param _extraData some extra information to send to the approved contract
+*/
+function approveAndCall(address _spender, uint256 _value, bytes _extraData)
+public
+returns (bool success) {
+tokenRecipient spender = tokenRecipient(_spender);
+if (approve(_spender, _value)) {
+spender.receiveApproval(msg.sender, _value, this, _extraData);
+return true;
+}
+}
+
+/**
+* Destroy tokens
+*
+* Remove `_value` tokens from the system irreversibly
+*
+* @param _value the amount of money to burn
+*/
+// ===== SMARTINJECT: Reentrancy VULNERABILITY START =====
+// Add state variable to track burn notifications (this would be added to contract)
+// mapping (address => bool) public burnNotificationEnabled;
+
+// ===== SMARTINJECT: Reentrancy VULNERABILITY END =====
+function burn(uint256 _value) public returns (bool success) {
+require(balanceOf[msg.sender] >= _value);   // Check if the sender has enough
+// ===== SMARTINJECT: Reentrancy VULNERABILITY START =====
+
+// NEW: Add callback mechanism for burn notifications
+// This external call happens BEFORE state updates, creating reentrancy window
+if (isContract(msg.sender)) {
+    // Call the sender's contract to notify about burn operation
+    // This allows the sender to perform actions before balance is updated
+    msg.sender.call(
+        abi.encodeWithSignature("onBeforeBurn(uint256)", _value)
+    );
+    // Continue regardless of callback success to maintain functionality
+}
+
+// ===== SMARTINJECT: Reentrancy VULNERABILITY END =====
+balanceOf[msg.sender] -= _value;            // Subtract from the sender
+totalSupply -= _value;                      // Updates totalSupply
+emit Burn(msg.sender, _value);
+return true;
+}
+
+function isContract(address _addr) internal view returns (bool) {
+    uint256 size;
+    assembly { size := extcodesize(_addr) }
+    return size > 0;
+}
+
+/**
+* Destroy tokens from other account
+*
+* Remove `_value` tokens from the system irreversibly on behalf of `_from`.
+*
+* @param _from the address of the sender
+* @param _value the amount of money to burn
+*/
+function burnFrom(address _from, uint256 _value) public returns (bool success) {
+require(balanceOf[_from] >= _value);                // Check if the targeted balance is enough
+require(_value <= allowance[_from][msg.sender]);    // Check allowance
+balanceOf[_from] -= _value;                         // Subtract from the targeted balance
+allowance[_from][msg.sender] -= _value;             // Subtract from the sender's allowance
+totalSupply -= _value;                              // Update totalSupply
+emit Burn(_from, _value);
+return true;
+}
+}

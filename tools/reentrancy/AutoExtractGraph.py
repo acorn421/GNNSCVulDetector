@@ -2,6 +2,7 @@ import os
 import re
 import time
 import numpy as np
+import argparse
 
 # map user-defined variables to symbolic names(var)
 var_list = ['balances[msg.sender]', 'participated[msg.sender]', 'playerPendingWithdrawals[msg.sender]',
@@ -724,7 +725,7 @@ def generate_graph(filepath):
     return node_feature_list_new, edge_list
 
 
-def printResult(file, node_feature, edge_feature):
+def printResult(file, node_feature, edge_feature, output_dir):
     main_point = ['S', 'W0', 'W1', 'W2', 'W3', 'W4', 'C0', 'C1', 'C2', 'C3', 'C4']
 
     for i in range(len(node_feature)):
@@ -737,8 +738,14 @@ def printResult(file, node_feature, edge_feature):
 
             node_feature[i][3] = tmp
 
-    nodeOutPath = "../../data/reentrancy/graph_data/node/" + file
-    edgeOutPath = "../../data/reentrancy/graph_data/edge/" + file
+    # Create output directories if they don't exist
+    node_dir = os.path.join(output_dir, "node")
+    edge_dir = os.path.join(output_dir, "edge")
+    os.makedirs(node_dir, exist_ok=True)
+    os.makedirs(edge_dir, exist_ok=True)
+
+    nodeOutPath = os.path.join(node_dir, file)
+    edgeOutPath = os.path.join(edge_dir, file)
 
     f_node = open(nodeOutPath, 'a')
     for i in range(len(node_feature)):
@@ -757,41 +764,64 @@ def printResult(file, node_feature, edge_feature):
 
 
 if __name__ == "__main__":
-#     test_contract = "../../data/reentrancy/source_code/cross-function-reentrancy.sol"
-#     node_feature, edge_feature = generate_graph(test_contract)
-#     node_feature = sorted(node_feature, key=lambda x: (x[0]))
-#     edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
-#    # node_feature, edge_feature = generate_potential_fallback_node(node_feature, edge_feature)
-#     print("node_feature", node_feature)
-#     print("edge_feature", edge_feature)
-
-    inputFileDir = "../../data/reentrancy/source_code/"
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Extract graph data from Solidity source code for reentrancy detection')
+    parser.add_argument('--input-dir', '-i', 
+                       default='../../data/reentrancy/source_code/',
+                       help='Input directory containing Solidity source files (default: ../../data/reentrancy/source_code/)')
+    parser.add_argument('--output-dir', '-o',
+                       default='../../data/reentrancy/graph_data/',
+                       help='Output directory for graph data (default: ../../data/reentrancy/graph_data/)')
+    
+    args = parser.parse_args()
+    
+    inputFileDir = args.input_dir
+    outputDir = args.output_dir
+    
+    # Ensure input directory exists
+    if not os.path.exists(inputFileDir):
+        print(f"Error: Input directory '{inputFileDir}' does not exist")
+        exit(1)
+    
+    # Ensure input directory ends with '/'
+    if not inputFileDir.endswith('/'):
+        inputFileDir += '/'
+    
+    # Ensure output directory ends with '/'
+    if not outputDir.endswith('/'):
+        outputDir += '/'
+    
+    print(f"Input directory: {inputFileDir}")
+    print(f"Output directory: {outputDir}")
+    
     dirs = os.listdir(inputFileDir)
     start_time = time.time()
+    
     for file in dirs:
         try:
             inputFilePath = inputFileDir + file
             node_feature, edge_feature = generate_graph(inputFilePath)
             node_feature = sorted(node_feature, key=lambda x: (x[0]))
             edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
-            printResult(file, node_feature, edge_feature)
+            printResult(file, node_feature, edge_feature, outputDir)
         except Exception as e:
             print(f"Error processing {file}: {e}")
             print("skipping...")
 
     # Remove any source code files that were skipped due to errors during processing
-    graph_dir = "../../data/reentrancy/graph_data/node/"
-    processed_files = set(os.listdir(graph_dir))
-    # List all files in the directory again to find skipped files
-    all_files = set(os.listdir(inputFileDir))
-    skipped_files = all_files - processed_files
-    for skipped_file in skipped_files:
-        skipped_path = os.path.join(inputFileDir, skipped_file)
-        try:
-            os.remove(skipped_path)
-            print(f"Removed skipped source code file: {skipped_file}")
-        except Exception as remove_err:
-            print(f"Failed to remove {skipped_file}: {remove_err}")
+    graph_dir = os.path.join(outputDir, "node")
+    if os.path.exists(graph_dir):
+        processed_files = set(os.listdir(graph_dir))
+        # List all files in the directory again to find skipped files
+        all_files = set(os.listdir(inputFileDir))
+        skipped_files = all_files - processed_files
+        for skipped_file in skipped_files:
+            skipped_path = os.path.join(inputFileDir, skipped_file)
+            try:
+                os.remove(skipped_path)
+                print(f"Removed skipped source code file: {skipped_file}")
+            except Exception as remove_err:
+                print(f"Failed to remove {skipped_file}: {remove_err}")
     
     end_time = time.time()
-    print(end_time - start_time)
+    print(f"Processing completed in {end_time - start_time:.2f} seconds")

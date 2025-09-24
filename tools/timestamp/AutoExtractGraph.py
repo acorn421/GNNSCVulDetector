@@ -2,6 +2,7 @@ import os
 import re
 import time
 import numpy as np
+import argparse
 
 # map user-defined variables to symbolic names(var)
 var_list = ['balances', 'userBalance[msg.sender]', '[msg.sender]', '[from]', '[to]', 'msg.sender']
@@ -206,7 +207,7 @@ def generate_graph(filepath):
     return node_feature_list_new, edge_list
 
 
-def outputResult(file, node_feature, edge_feature):
+def outputResult(file, node_feature, edge_feature, output_dir):
     main_point = ['S0', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15',
                   'S16', 'S17',
                   'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12', 'W13', 'W14', 'W15',
@@ -222,8 +223,14 @@ def outputResult(file, node_feature, edge_feature):
 
             node_feature[i][2] = tmp
 
-    nodeOutPath = "../../data/timestamp/graph_data/node/" + file
-    edgeOutPath = "../../data/timestamp/graph_data/edge/" + file
+    # Create output directories if they don't exist
+    node_dir = os.path.join(output_dir, "node")
+    edge_dir = os.path.join(output_dir, "edge")
+    os.makedirs(node_dir, exist_ok=True)
+    os.makedirs(edge_dir, exist_ok=True)
+
+    nodeOutPath = os.path.join(node_dir, file)
+    edgeOutPath = os.path.join(edge_dir, file)
 
     f_node = open(nodeOutPath, 'a')
     for i in range(len(node_feature)):
@@ -239,23 +246,46 @@ def outputResult(file, node_feature, edge_feature):
 
 
 if __name__ == "__main__":
-    test_contract = "../../data/timestamp/source_code/1813.sol"
-    node_feature, edge_feature = generate_graph(test_contract)
-    node_feature = sorted(node_feature, key=lambda x: (x[0]))
-    edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
-    print("node_feature", node_feature)
-    print("edge_feature", edge_feature)
-
-    # inputFileDir = "../../data/timestamp/source_code/"
-    # dirs = os.listdir(inputFileDir)
-    # start_time = time.time()
-    # for file in dirs:
-    #     print(file)
-    #     inputFilePath = inputFileDir + file
-    #     node_feature, edge_feature = generate_graph(inputFilePath)
-    #     node_feature = sorted(node_feature, key=lambda x: (x[0]))
-    #     edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
-    #     outputResult(file, node_feature, edge_feature)
-    #
-    # end_time = time.time()
-    # print(end_time - start_time)
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Extract graph data from Solidity source code for timestamp vulnerability detection')
+    parser.add_argument('--input-dir', '-i', 
+                       default='../../data/timestamp/source_code/',
+                       help='Input directory containing Solidity source files (default: ../../data/timestamp/source_code/)')
+    parser.add_argument('--output-dir', '-o',
+                       default='../../data/timestamp/graph_data/',
+                       help='Output directory for graph data (default: ../../data/timestamp/graph_data/)')
+    
+    args = parser.parse_args()
+    
+    inputFileDir = args.input_dir
+    outputDir = args.output_dir
+    
+    # Ensure input directory exists
+    if not os.path.exists(inputFileDir):
+        print(f"Error: Input directory '{inputFileDir}' does not exist")
+        exit(1)
+    
+    # Ensure input directory ends with '/'
+    if not inputFileDir.endswith('/'):
+        inputFileDir += '/'
+    
+    # Ensure output directory ends with '/'
+    if not outputDir.endswith('/'):
+        outputDir += '/'
+    
+    print(f"Input directory: {inputFileDir}")
+    print(f"Output directory: {outputDir}")
+    
+    dirs = os.listdir(inputFileDir)
+    start_time = time.time()
+    
+    for file in dirs:
+        print(file)
+        inputFilePath = inputFileDir + file
+        node_feature, edge_feature = generate_graph(inputFilePath)
+        node_feature = sorted(node_feature, key=lambda x: (x[0]))
+        edge_feature = sorted(edge_feature, key=lambda x: (x[2], x[3]))
+        outputResult(file, node_feature, edge_feature, outputDir)
+    
+    end_time = time.time()
+    print(f"Processing completed in {end_time - start_time:.2f} seconds")

@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import argparse
 from vec2onehot import vec2onehot
 
 """
@@ -399,24 +400,33 @@ def construct_vec(edge_list, node_embedding, var_embedding, edge_embedding, edge
 
 
 if __name__ == "__main__":
-    # node = "../../data/reentrancy/graph_data/node/cross-function-reentrancy.sol"
-    # edge = "../../data/reentrancy/graph_data/edge/cross-function-reentrancy.sol"
-    # nodeNum, node_list, node_attribute_list = extract_node_features(node)
-    # node_attribute_list, extra_var_list = elimination_node(node_attribute_list)
-    # node_encode, var_encode, node_embedding, var_embedding = embedding_node(node_attribute_list)
-    # edge_list, extra_edge_list = elimination_edge(edge)
-    # edge_encode, edge_embedding = embedding_edge(edge_list)
-    # node_vec, graph_edge = construct_vec(edge_list, node_embedding, var_embedding, edge_embedding, edge_encode)
-
-    v_path = "../../data/reentrancy/graph_data/node/"
-    e_path = "../../data/reentrancy/graph_data/edge/"
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Process graph data for reentrancy detection')
+    parser.add_argument('--graph_data_dir', type=str, required=True, 
+                        help='Path to the graph data directory containing node/ and edge/ subdirectories')
+    parser.add_argument('--results_dir', type=str, required=True,
+                        help='Path to the results directory for output files')
+    parser.add_argument('--name_txt', type=str, required=True,
+                        help='Path to the contract name file (e.g., reentrancy_contract_name.txt)')
+    parser.add_argument('--label_txt', type=str, required=True,
+                        help='Path to the contract label file (e.g., reentrancy_contract_label.txt)')
     
-    corenodes_output_tmp = open('./results/Reentrancy_AutoExtract_corenodes.json', 'w')
-    fullnodes_ouptput_tmp = open('./results/Reentrancy_AutoExtract_fullnodes.json', 'w')
-    corenodes_ouptput_gcn = open('./results/Reentrancy_AutoExtract_corenodes.txt', 'a')
-    fullnodes_ouptput_gcn = open('./results/Reentrancy_AutoExtract_fullnodes.txt', 'a')
-    contract_name = open("./reentrancy_contract_name.txt")  # contracts list
-    contract_label = open("./reentrancy_contract_label.txt")  # contracts label
+    args = parser.parse_args()
+    
+    # Construct paths using provided arguments
+    v_path = os.path.join(args.graph_data_dir, "node")
+    e_path = os.path.join(args.graph_data_dir, "edge")
+    
+    # Ensure results directory exists
+    os.makedirs(args.results_dir, exist_ok=True)
+    
+    # Open output files in results directory
+    corenodes_output_tmp = open(os.path.join(args.results_dir, 'Reentrancy_AutoExtract_corenodes.json'), 'w')
+    fullnodes_ouptput_tmp = open(os.path.join(args.results_dir, 'Reentrancy_AutoExtract_fullnodes.json'), 'w')
+    corenodes_ouptput_gcn = open(os.path.join(args.results_dir, 'Reentrancy_AutoExtract_corenodes.txt'), 'a')
+    fullnodes_ouptput_gcn = open(os.path.join(args.results_dir, 'Reentrancy_AutoExtract_fullnodes.txt'), 'a')
+    contract_name = open(args.name_txt)  # contracts list
+    contract_label = open(args.label_txt)  # contracts label
     names = contract_name.readline().strip(" ")
     labels = contract_label.readline()
     

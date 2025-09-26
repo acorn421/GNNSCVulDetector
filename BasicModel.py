@@ -61,6 +61,16 @@ class DetectModel(object):
 
         # Collect parameters:
         params = self.default_params()
+
+        # Override train/test file paths from command line if provided
+        if '--train-file' in args and args['--train-file'] is not None:
+            params['train_file'] = args['--train-file']
+            print(f"Using training file: {params['train_file']}")
+
+        if '--test-file' in args and args['--test-file'] is not None:
+            params['valid_file'] = args['--test-file']
+            print(f"Using test/validation file: {params['valid_file']}")
+
         config_file = args.get('--config-file')
         if config_file is not None:
             with open(config_file, 'r') as f:
@@ -265,6 +275,13 @@ class DetectModel(object):
         accuracies = []
         start_time = time.time()
         processed_graphs = 0
+
+        # Track metrics for entire epoch
+        total_TP = 0
+        total_FN = 0
+        total_FP = 0
+        total_TN = 0
+
         accuracy_ops = [self.ops['accuracy_task%i' % task_id] for task_id in self.params['task_ids']]
         batch_iterator = ThreadedIterator(self.make_minibatch_iterator(data, is_training), max_queue_size=5)
         for step, batch_data in enumerate(batch_iterator):
@@ -280,6 +297,13 @@ class DetectModel(object):
             val_1, val_2, val_3, val_4, val_5, val_6 = self.sess.run(
                 [self.ops['sigm_c'], self.ops['sigm_TP'], self.ops['sigm_FN'], self.ops['sigm_FP'], self.ops['sigm_TN'],
                  self.ops['sigm_sum']], feed_dict=batch_data)
+
+            # Accumulate metrics
+            total_TP += val_2
+            total_FN += val_3
+            total_FP += val_4
+            total_TN += val_5
+
             val_R, val_P, val_F1, val_FPR = self.sess.run(
                 [self.ops['sigm_Recall'], self.ops['sigm_Precision'], self.ops['sigm_F1'], self.ops['sigm_FPR']],
                 feed_dict=batch_data)
@@ -316,16 +340,18 @@ class DetectModel(object):
             loss += batch_loss * num_graphs
             accuracies.append(np.array(batch_accuracies) * num_graphs)
 
-            print("random seed: {}".format(self.random_seed))
-            print("sum: {}".format(val_6))
-            print("TP： {}".format(val_2))
-            print("FN： {}".format(val_3))
-            print("FP： {}".format(val_4))
-            print("TN： {}".format(val_5))
-            print("Recall: {}".format(val_R))
-            print("Precision: {}".format(val_P))
-            print("F1: {}".format(val_F1))
-            print("FPR: {}".format(val_FPR))
+            # Only print detailed metrics for validation, not training
+            if not is_training:
+                print("random seed: {}".format(self.random_seed))
+                print("sum: {}".format(val_6))
+                print("TP： {}".format(val_2))
+                print("FN： {}".format(val_3))
+                print("FP： {}".format(val_4))
+                print("TN： {}".format(val_5))
+                print("Recall: {}".format(val_R))
+                print("Precision: {}".format(val_P))
+                print("F1: {}".format(val_F1))
+                print("FPR: {}".format(val_FPR))
             print("Running %s, batch %i (has %i graphs). "
                   "Loss so far: %.4f" % (epoch_name, step, num_graphs, loss / processed_graphs), end='\r')
 
@@ -333,11 +359,22 @@ class DetectModel(object):
         loss = loss / processed_graphs
         error_ratios = accuracies / chemical_accuracies[self.params["task_ids"]]
         instance_per_sec = processed_graphs / (time.time() - start_time)
-        return loss, accuracies, error_ratios, instance_per_sec
+
+        # Calculate epoch-level metrics
+        epoch_recall = total_TP / (total_TP + total_FN) if (total_TP + total_FN) > 0 else 0
+        epoch_precision = total_TP / (total_TP + total_FP) if (total_TP + total_FP) > 0 else 0
+        epoch_f1 = 2 * total_TP / (2 * total_TP + total_FP + total_FN) if (2 * total_TP + total_FP + total_FN) > 0 else 0
+
+        return loss, accuracies, error_ratios, instance_per_sec, epoch_recall, epoch_precision, epoch_f1
 
     def train(self):
         val_acc1 = []
         log_to_save = []
+
+        # Track best metrics
+        best_acc_metrics = {'acc': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'epoch': 0}
+        best_f1_metrics = {'acc': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'epoch': 0}
+
         total_time_start = time.time()
         with self.graph.as_default():
             if self.args.get('--restore') is not None:
@@ -351,30 +388,45 @@ class DetectModel(object):
                 print("== Epoch %i" % epoch)
                 train_start = time.time()
                 self.num_graph = self.train_num_graph
-                train_loss, train_accs, train_errs, train_speed = self.run_epoch("epoch %i (training)" % epoch,
-                                                                                 self.train_data, epoch, True)
+                train_loss, train_accs, train_errs, train_speed, train_recall, train_precision, train_f1 = self.run_epoch(
+                    "epoch %i (training)" % epoch, self.train_data, epoch, True)
                 accs_str = " ".join(["%i:%.5f" % (id, acc) for (id, acc) in zip(self.params['task_ids'], train_accs)])
                 errs_str = " ".join(["%i:%.5f" % (id, err) for (id, err) in zip(self.params['task_ids'], train_errs)])
-                print("\r\x1b[K Train: loss: %.5f | acc: %s | error_ratio: %s | instances/sec: %.2f" % (train_loss,
-                                                                                                        accs_str,
-                                                                                                        errs_str,
-                                                                                                        train_speed))
+                print("\r\x1b[K Train: loss: %.5f | F1: %.5f | instances/sec: %.2f" % (train_loss, train_f1, train_speed))
                 epoch_time_train = time.time() - train_start
                 print(epoch_time_train)
 
                 valid_start = time.time()
                 self.num_graph = self.valid_num_graph
-                valid_loss, valid_accs, valid_errs, valid_speed = self.run_epoch("epoch %i (validation)" % epoch,
-                                                                                 self.valid_data, epoch, False)
+                valid_loss, valid_accs, valid_errs, valid_speed, valid_recall, valid_precision, valid_f1 = self.run_epoch(
+                    "epoch %i (validation)" % epoch, self.valid_data, epoch, False)
                 accs_str = " ".join(["%i:%.5f" % (id, acc) for (id, acc) in zip(self.params['task_ids'], valid_accs)])
                 errs_str = " ".join(["%i:%.5f" % (id, err) for (id, err) in zip(self.params['task_ids'], valid_errs)])
-                print("\r\x1b[K Valid: loss: %.5f | acc: %s | error_ratio: %s | instances/sec: %.2f" % (valid_loss,
-                                                                                                        accs_str,
-                                                                                                        errs_str,
-                                                                                                        valid_speed))
+                print("\r\x1b[K Valid: Acc: %.5f | Precision: %.5f | Recall: %.5f | F1: %.5f" %
+                      (valid_accs[0], valid_precision, valid_recall, valid_f1))
                 epoch_time_valid = time.time() - valid_start
                 print(epoch_time_valid)
                 val_acc1.append(valid_accs)
+
+                # Update best metrics
+                current_acc = valid_accs[0]  # Assuming single task
+                if current_acc > best_acc_metrics['acc']:
+                    best_acc_metrics = {
+                        'acc': current_acc,
+                        'precision': valid_precision,
+                        'recall': valid_recall,
+                        'f1': valid_f1,
+                        'epoch': epoch
+                    }
+
+                if valid_f1 > best_f1_metrics['f1']:
+                    best_f1_metrics = {
+                        'acc': current_acc,
+                        'precision': valid_precision,
+                        'recall': valid_recall,
+                        'f1': valid_f1,
+                        'epoch': epoch
+                    }
 
                 epoch_time_total = time.time() - total_time_start
                 print(epoch_time_total)
@@ -397,7 +449,32 @@ class DetectModel(object):
                 #         'patience'])
                 #     break
 
-            print(max(val_acc1))
+            # Print final results
+            print("\n" + "="*80)
+            print("                         FINAL TRAINING RESULTS")
+            print("="*80)
+
+            print("\n📊 BEST VALIDATION ACCURACY STATE (Epoch %d):" % best_acc_metrics['epoch'])
+            print("-"*50)
+            print("  • Accuracy:  %.5f" % best_acc_metrics['acc'])
+            print("  • Precision: %.5f" % best_acc_metrics['precision'])
+            print("  • Recall:    %.5f" % best_acc_metrics['recall'])
+            print("  • F1 Score:  %.5f" % best_acc_metrics['f1'])
+
+            print("\n🎯 BEST F1 SCORE STATE (Epoch %d):" % best_f1_metrics['epoch'])
+            print("-"*50)
+            print("  • Accuracy:  %.5f" % best_f1_metrics['acc'])
+            print("  • Precision: %.5f" % best_f1_metrics['precision'])
+            print("  • Recall:    %.5f" % best_f1_metrics['recall'])
+            print("  • F1 Score:  %.5f" % best_f1_metrics['f1'])
+
+            print("\n📈 HIGHEST VALIDATION ACCURACY ACHIEVED:")
+            print("-"*50)
+            print("  • Maximum: %.5f" % max(val_acc1)[0])
+
+            print("\n" + "="*80)
+            print("Training completed successfully!")
+            print("="*80 + "\n")
 
     def save_model(self, path: str) -> None:
         weights_to_save = {}

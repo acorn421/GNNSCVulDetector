@@ -1,3 +1,0 @@
-W0 S W0 1 RH
-W0 S W0 1 RH
-W0 S W0 1 RH

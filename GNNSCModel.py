@@ -5,6 +5,8 @@ Usage:
 
 Options:
     -h --help                Show this screen.
+    --train-file FILE        Training data file path (JSON format).
+    --test-file FILE         Test/validation data file path (JSON format).
     --config-file FILE       Hyperparameter configuration file path (in JSON format).
     --config CONFIG          Hyperparameter configuration dictionary (in JSON format).
     --log_dir DIR            Log dir name.
@@ -178,26 +180,36 @@ class GNNSCModel(DetectModel):
                 receiving_node_num_ta = receiving_node_num_ta.unstack(
                     self.placeholders['receiving_node_num'][prop_round])
 
-                new_node_states_ta = tf.TensorArray(tf.float32,
-                                                    infer_shape=False,
-                                                    element_shape=[self.params['hidden_size']],
-                                                    size=tf.shape(cur_node_states)[0],
-                                                    clear_after_read=False,
-                                                    name='new_node_states')
+                # Create a dense tensor for node states instead of TensorArray
+                new_node_states = tf.identity(cur_node_states)
 
-                # Actual propagation schedule implementation:
                 # Initialize the initial nodes with their state from last round:
-                new_node_states_ta = new_node_states_ta.scatter(self.placeholders['initial_nodes'][prop_round],
-                                                                tf.gather(cur_node_states,
-                                                                          self.placeholders['initial_nodes'][
-                                                                              prop_round]))
+                initial_node_indices = self.placeholders['initial_nodes'][prop_round]
+                initial_node_states = tf.gather(cur_node_states, initial_node_indices)
 
-                def do_substep(substep_id, new_node_states_ta):
+                # Create mask for initial nodes
+                num_nodes = tf.shape(cur_node_states)[0]
+                initial_mask = tf.scatter_nd(
+                    tf.expand_dims(initial_node_indices, 1),
+                    tf.ones_like(initial_node_indices, dtype=tf.float32),
+                    [num_nodes]
+                )
+                initial_mask = tf.expand_dims(initial_mask, 1)
+
+                # Apply initial states
+                new_node_states = new_node_states * (1 - initial_mask) + \
+                                tf.scatter_nd(
+                                    tf.expand_dims(initial_node_indices, 1),
+                                    initial_node_states,
+                                    tf.shape(cur_node_states)
+                                ) * initial_mask
+
+                def do_substep(substep_id, node_states):
                     # For each edge active in this substep, pull source state and transform:
                     sent_messages = []
                     for edge_typ in range(self.num_edge_types):
-                        sending_states = new_node_states_ta.gather(
-                            sending_nodes_ta.read(substep_id * self.num_edge_types + edge_typ))
+                        sending_node_indices = sending_nodes_ta.read(substep_id * self.num_edge_types + edge_typ)
+                        sending_states = tf.gather(node_states, sending_node_indices)
                         messages = tf.matmul(sending_states, self.weights['edge_weights'][edge_typ])
                         if self.params['use_edge_bias']:
                             messages += self.weights['edge_biases'][edge_typ]
@@ -216,20 +228,34 @@ class GNNSCModel(DetectModel):
                     old_receiving_node_states.set_shape([None, self.params['hidden_size']])
                     substep_new_node_states = \
                         self.weights['rnn_cells'](aggregated_received_messages, old_receiving_node_states)[1]
-                    # substep_new_node_states = tf.add(aggregated_received_messages, old_receiving_node_states)
-                    # Write updated states back:
-                    new_node_states_ta = new_node_states_ta.scatter(substep_receiving_nodes, substep_new_node_states)
-                    return substep_id + 1, new_node_states_ta
 
-                def is_done(substep_id, new_node_states_ta_unused):
+                    # Update node states using scatter_nd_update
+                    updates = tf.scatter_nd(
+                        tf.expand_dims(substep_receiving_nodes, 1),
+                        substep_new_node_states,
+                        tf.shape(node_states)
+                    )
+
+                    # Create mask for receiving nodes
+                    receiving_mask = tf.scatter_nd(
+                        tf.expand_dims(substep_receiving_nodes, 1),
+                        tf.ones_like(substep_receiving_nodes, dtype=tf.float32),
+                        [tf.shape(node_states)[0]]
+                    )
+                    receiving_mask = tf.expand_dims(receiving_mask, 1)
+
+                    # Apply updates only to receiving nodes
+                    node_states = node_states * (1 - receiving_mask) + updates
+
+                    return substep_id + 1, node_states
+
+                def is_done(substep_id, node_states_unused):
                     return tf.logical_and(substep_id < self.params['propagation_substeps'],
                                           tf.greater(tf.shape(receiving_nodes_ta.read(substep_id))[0], 0))
 
-                _, new_node_states_ta = tf.while_loop(cond=is_done,
-                                                      body=do_substep,
-                                                      loop_vars=[tf.constant(0), new_node_states_ta])
-
-                cur_node_states = new_node_states_ta.stack(name="state_stack_round%i" % (prop_round,))
+                _, cur_node_states = tf.while_loop(cond=is_done,
+                                                   body=do_substep,
+                                                   loop_vars=[tf.constant(0), new_node_states])
 
         return cur_node_states
 

@@ -171,3 +171,9 @@ ehthumbs.db
 Thumbs.db
 
 ./results/
+
+
+data_bak*
+data_origin
+data
+backup

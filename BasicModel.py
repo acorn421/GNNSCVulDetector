@@ -365,7 +365,11 @@ class DetectModel(object):
         epoch_precision = total_TP / (total_TP + total_FP) if (total_TP + total_FP) > 0 else 0
         epoch_f1 = 2 * total_TP / (2 * total_TP + total_FP + total_FN) if (2 * total_TP + total_FP + total_FN) > 0 else 0
 
-        return loss, accuracies, error_ratios, instance_per_sec, epoch_recall, epoch_precision, epoch_f1
+        # Calculate prediction counts
+        pred_positive = int(total_TP + total_FP)  # Number of samples predicted as 1
+        pred_negative = int(total_TN + total_FN)  # Number of samples predicted as 0
+
+        return loss, accuracies, error_ratios, instance_per_sec, epoch_recall, epoch_precision, epoch_f1, pred_positive, pred_negative
 
     def train(self):
         val_acc1 = []
@@ -393,13 +397,13 @@ class DetectModel(object):
             valid_writer = csv.writer(valid_csv)
 
             # Write headers
-            train_writer.writerow(['epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1'])
-            valid_writer.writerow(['epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1'])
+            train_writer.writerow(['epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1', 'pred_0', 'pred_1'])
+            valid_writer.writerow(['epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1', 'pred_0', 'pred_1'])
 
         total_time_start = time.time()
         with self.graph.as_default():
             if self.args.get('--restore') is not None:
-                _, valid_accs, _, _ = self.run_epoch("Resumed (validation)", self.valid_data, False)
+                _, valid_accs, _, _, _, _, _, _, _ = self.run_epoch("Resumed (validation)", self.valid_data, 0, False)
                 best_val_acc = np.sum(valid_accs)
                 best_val_acc_epoch = 0
                 print("\r\x1b[KResumed operation, initial cum. val. acc: %.5f" % best_val_acc)
@@ -409,7 +413,7 @@ class DetectModel(object):
                 print("== Epoch %i" % epoch)
                 train_start = time.time()
                 self.num_graph = self.train_num_graph
-                train_loss, train_accs, train_errs, train_speed, train_recall, train_precision, train_f1 = self.run_epoch(
+                train_loss, train_accs, train_errs, train_speed, train_recall, train_precision, train_f1, train_pred_pos, train_pred_neg = self.run_epoch(
                     "epoch %i (training)" % epoch, self.train_data, epoch, True)
                 accs_str = " ".join(["%i:%.5f" % (id, acc) for (id, acc) in zip(self.params['task_ids'], train_accs)])
                 errs_str = " ".join(["%i:%.5f" % (id, err) for (id, err) in zip(self.params['task_ids'], train_errs)])
@@ -419,12 +423,12 @@ class DetectModel(object):
 
                 # Write training metrics to CSV if verbose
                 if self.verbose:
-                    train_writer.writerow([epoch, train_loss, train_accs[0], train_precision, train_recall, train_f1])
+                    train_writer.writerow([epoch, train_loss, train_accs[0], train_precision, train_recall, train_f1, train_pred_neg, train_pred_pos])
                     train_csv.flush()
 
                 valid_start = time.time()
                 self.num_graph = self.valid_num_graph
-                valid_loss, valid_accs, valid_errs, valid_speed, valid_recall, valid_precision, valid_f1 = self.run_epoch(
+                valid_loss, valid_accs, valid_errs, valid_speed, valid_recall, valid_precision, valid_f1, valid_pred_pos, valid_pred_neg = self.run_epoch(
                     "epoch %i (validation)" % epoch, self.valid_data, epoch, False)
                 accs_str = " ".join(["%i:%.5f" % (id, acc) for (id, acc) in zip(self.params['task_ids'], valid_accs)])
                 errs_str = " ".join(["%i:%.5f" % (id, err) for (id, err) in zip(self.params['task_ids'], valid_errs)])
@@ -436,7 +440,7 @@ class DetectModel(object):
 
                 # Write validation metrics to CSV if verbose
                 if self.verbose:
-                    valid_writer.writerow([epoch, valid_loss, valid_accs[0], valid_precision, valid_recall, valid_f1])
+                    valid_writer.writerow([epoch, valid_loss, valid_accs[0], valid_precision, valid_recall, valid_f1, valid_pred_neg, valid_pred_pos])
                     valid_csv.flush()
 
                 # Update best metrics
@@ -507,12 +511,33 @@ class DetectModel(object):
             print("Training completed successfully!")
             print("="*80 + "\n")
 
+            # Save best F1 metrics to CSV file
+            if self.exp_name:
+                summary_file = f'res_{self.exp_name}.csv'
+            else:
+                summary_file = 'res.csv'
+
+            with open(summary_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                # Write header
+                writer.writerow(['epoch', 'accuracy', 'precision', 'recall', 'f1'])
+                # Write best F1 metrics
+                writer.writerow([
+                    best_f1_metrics['epoch'],
+                    best_f1_metrics['acc'],
+                    best_f1_metrics['precision'],
+                    best_f1_metrics['recall'],
+                    best_f1_metrics['f1']
+                ])
+
+            print(f"📝 Best F1 metrics saved to: {summary_file}")
+
             # Close CSV files if verbose
             if self.verbose:
                 train_csv.close()
                 valid_csv.close()
-                print(f"Training metrics saved to: {train_csv_file}")
-                print(f"Validation metrics saved to: {valid_csv_file}")
+                print(f"📊 Training metrics saved to: {train_csv_file}")
+                print(f"📊 Validation metrics saved to: {valid_csv_file}")
 
     def save_model(self, path: str) -> None:
         weights_to_save = {}

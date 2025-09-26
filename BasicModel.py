@@ -53,7 +53,12 @@ class DetectModel(object):
         self.random_seed = int(9903)   # optional
 
         threshold = args.get('--thresholds')
-        self.threshold = float(0.45)   # optional
+        if threshold is not None:
+            self.threshold = float(threshold)
+            print(f"Using threshold: {self.threshold}")
+        else:
+            self.threshold = float(0.45)  # default value
+            print(f"Using default threshold: {self.threshold}")
 
         # CSV logging options
         self.verbose = args.get('--verbose', False)

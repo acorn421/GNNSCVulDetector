@@ -1,4 +1,4 @@
-#!/usr/bin/env/python
+#!/usr/bin/env python
 """
 Usage:
     GNNSCModel.py [options]
@@ -6,7 +6,7 @@ Usage:
 Options:
     -h --help                Show this screen.
     --train-file FILE        Training data file path (JSON format).
-    --test-file FILE         Test/validation data file path (JSON format).
+    --valid-file FILE        Validation data file path (JSON format).
     --config-file FILE       Hyperparameter configuration file path (in JSON format).
     --config CONFIG          Hyperparameter configuration dictionary (in JSON format).
     --log_dir DIR            Log dir name.
@@ -527,7 +527,15 @@ class GNNSCModel(DetectModel):
 
 
 def main():
-    args = docopt(__doc__)
+    try:
+        args = docopt(__doc__)
+    except SystemExit as e:
+        print("Error parsing arguments. Please check your command line options.")
+        print("Example usage:")
+        print("  python GNNSCModel.py --train-file train.json --valid-file valid.json")
+        print("\nRun with --help to see all available options.")
+        raise
+
     model = GNNSCModel(args)
     model.train()
 

@@ -67,9 +67,9 @@ class DetectModel(object):
             params['train_file'] = args['--train-file']
             print(f"Using training file: {params['train_file']}")
 
-        if '--test-file' in args and args['--test-file'] is not None:
-            params['valid_file'] = args['--test-file']
-            print(f"Using test/validation file: {params['valid_file']}")
+        if '--valid-file' in args and args['--valid-file'] is not None:
+            params['valid_file'] = args['--valid-file']
+            print(f"Using validation file: {params['valid_file']}")
 
         config_file = args.get('--config-file')
         if config_file is not None:

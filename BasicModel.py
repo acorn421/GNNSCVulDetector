@@ -316,8 +316,6 @@ class DetectModel(object):
                                              segment_ids=self.placeholders['graph_nodes_list'],
                                              num_segments=self.placeholders['num_graphs'])
                 var_finial_node = self.sess.run([ss], feed_dict=batch_data)
-                np.savetxt("./features/timestamp/timestamp_train_feature.txt", var_finial_node[0],
-                           fmt="%.6f")
                 # print("graph representation: {}".format(var_fn))
                 print("type: {}  length: {}".format(type(var_fn), len(var_fn)))
             elif epoch == 150 and is_training is not True:
@@ -326,9 +324,6 @@ class DetectModel(object):
                                              segment_ids=self.placeholders['graph_nodes_list'],
                                              num_segments=self.placeholders['num_graphs'])
                 var_finial_node = self.sess.run([ss], feed_dict=batch_data)
-                np.savetxt("./features/timestamp/timestamp_valid_feature.txt", var_finial_node[0],
-                           delimiter=", ",
-                           fmt="%.6f")
                 # print("graph representation: {}".format(var_fn))
                 print("type: {}  length: {}".format(type(var_fn), len(var_fn)))
 

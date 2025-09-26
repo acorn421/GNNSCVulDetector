@@ -10,6 +10,7 @@ import json
 import numpy as np
 import pickle
 import random
+import csv
 
 
 class DetectModel(object):
@@ -53,6 +54,10 @@ class DetectModel(object):
 
         threshold = args.get('--thresholds')
         self.threshold = float(0.45)   # optional
+
+        # CSV logging options
+        self.verbose = args.get('--verbose', False)
+        self.exp_name = args.get('--exp_name', '')
 
         self.run_id = "_".join([time.strftime("%Y-%m-%d-%H-%M-%S"), str(os.getpid())])
         log_dir = args.get('--log_dir') or '.'
@@ -370,6 +375,27 @@ class DetectModel(object):
         best_acc_metrics = {'acc': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'epoch': 0}
         best_f1_metrics = {'acc': 0, 'precision': 0, 'recall': 0, 'f1': 0, 'epoch': 0}
 
+        # Initialize CSV files for logging if verbose
+        if self.verbose:
+            # Determine CSV file names
+            if self.exp_name:
+                train_csv_file = f'train_{self.exp_name}.csv'
+                valid_csv_file = f'valid_{self.exp_name}.csv'
+            else:
+                train_csv_file = 'train.csv'
+                valid_csv_file = 'valid.csv'
+
+            # Create CSV writers
+            train_csv = open(train_csv_file, 'w', newline='')
+            valid_csv = open(valid_csv_file, 'w', newline='')
+
+            train_writer = csv.writer(train_csv)
+            valid_writer = csv.writer(valid_csv)
+
+            # Write headers
+            train_writer.writerow(['epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1'])
+            valid_writer.writerow(['epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1'])
+
         total_time_start = time.time()
         with self.graph.as_default():
             if self.args.get('--restore') is not None:
@@ -391,6 +417,11 @@ class DetectModel(object):
                 epoch_time_train = time.time() - train_start
                 print(epoch_time_train)
 
+                # Write training metrics to CSV if verbose
+                if self.verbose:
+                    train_writer.writerow([epoch, train_loss, train_accs[0], train_precision, train_recall, train_f1])
+                    train_csv.flush()
+
                 valid_start = time.time()
                 self.num_graph = self.valid_num_graph
                 valid_loss, valid_accs, valid_errs, valid_speed, valid_recall, valid_precision, valid_f1 = self.run_epoch(
@@ -402,6 +433,11 @@ class DetectModel(object):
                 epoch_time_valid = time.time() - valid_start
                 print(epoch_time_valid)
                 val_acc1.append(valid_accs)
+
+                # Write validation metrics to CSV if verbose
+                if self.verbose:
+                    valid_writer.writerow([epoch, valid_loss, valid_accs[0], valid_precision, valid_recall, valid_f1])
+                    valid_csv.flush()
 
                 # Update best metrics
                 current_acc = valid_accs[0]  # Assuming single task
@@ -470,6 +506,13 @@ class DetectModel(object):
             print("\n" + "="*80)
             print("Training completed successfully!")
             print("="*80 + "\n")
+
+            # Close CSV files if verbose
+            if self.verbose:
+                train_csv.close()
+                valid_csv.close()
+                print(f"Training metrics saved to: {train_csv_file}")
+                print(f"Validation metrics saved to: {valid_csv_file}")
 
     def save_model(self, path: str) -> None:
         weights_to_save = {}

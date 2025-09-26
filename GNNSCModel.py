@@ -14,6 +14,8 @@ Options:
     --random_seed seed       Random seed
     --thresholds threshold   threshold
     --restore FILE           File to restore weights from.
+    --verbose                Output training metrics to CSV files.
+    --exp_name NAME          Experiment name for CSV output files.
     -t                       output
 """
 from __future__ import print_function
